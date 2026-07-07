@@ -34,7 +34,7 @@ else:
     genai.configure(api_key=api_key_input)
     
     # Area Unggah Gambar
-    uploaded_file = st.file_uploader("Unggah foto atau ilustrasi Anda (JPG/PNG)", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("Unggah foto atau ilustrasi Anda (JPG/PNG)", type=["jpg", "jpeg", "png", "svg"])
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
