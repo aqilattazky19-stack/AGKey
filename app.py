@@ -10,8 +10,8 @@ import cairosvg
 # 1. Konfigurasi Tampilan Halaman Website
 st.set_page_config(page_title="Global Microstock SEO Generator", page_icon="📸", layout="wide")
 
-st.title("📸 Global Microstock SEO & Metadata Generator (Standard v2)")
-st.caption("Mendukung JPG, PNG, SVG. Tanpa batasan penggunaan & Akurat sesuai pasar global.")
+st.title("📸 Global Microstock SEO & Metadata Generator (Batch Mode)")
+st.caption("Mendukung Batch Upload (JPG, PNG, SVG sekaligus). Tanpa batasan penggunaan.")
 
 # 2. Input API Key di Sidebar
 st.sidebar.header("Pengaturan API")
@@ -33,105 +33,97 @@ def get_global_trends(keyword):
 if not api_key_input:
     st.info("💡 Silakan masukkan Gemini API Key Anda di bilah samping (sidebar) untuk mulai menggunakan aplikasi!")
 else:
-    # Konfigurasi AI dengan API Key yang dimasukkan pengguna
     genai.configure(api_key=api_key_input)
     
-    # Area Unggah Gambar (Sekarang Mendukung SVG)
-    uploaded_file = st.file_uploader("Unggah foto, ilustrasi, atau file vektor Anda (JPG, PNG, SVG)", type=["jpg", "jpeg", "png", "svg"])
+    # AKTIFKAN BATCH UPLOAD DI SINI (accept_multiple_files=True)
+    uploaded_files = st.file_uploader(
+        "Unggah foto, ilustrasi, atau file vektor Anda (Bisa pilih banyak file sekaligus)", 
+        type=["jpg", "jpeg", "png", "svg"], 
+        accept_multiple_files=True
+    )
     
-    if uploaded_file is not None:
-        file_ext = uploaded_file.name.split(".")[-1].lower()
+    # Jika ada file yang diunggah
+    if uploaded_files:
+        st.write(f"📁 **{len(uploaded_files)} file siap diproses.**")
         
-        # Proses Pembacaan Gambar Berdasarkan Format
-        if file_ext == "svg":
-            try:
-                # Konversi SVG ke PNG sementara di dalam memori agar bisa dibaca AI & ditampilkan di UI
-                svg_bytes = uploaded_file.read()
-                png_bytes = cairosvg.svg2png(bytestring=svg_bytes)
-                image = Image.open(io.BytesIO(png_bytes))
-            except Exception as e:
-                st.error(f"Gagal memproses file SVG: {e}. Pastikan file SVG Anda valid.")
-                st.stop()
-        else:
-            image = Image.open(uploaded_file)
+        # Tombol untuk mulai memproses seluruh gambar secara massal
+        if st.button("Proses Semua Gambar massal 🚀", type="primary"):
+            all_results = [] # Tempat menampung data CSV gabungan
+            
+            # Progress bar untuk memantau status pengerjaan
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Lakukan perulangan untuk setiap file yang diunggah
+            for index, uploaded_file in enumerate(uploaded_files):
+                file_ext = uploaded_file.name.split(".")[-1].lower()
+                status_text.text(f"Memproses ({index+1}/{len(uploaded_files)}): {uploaded_file.name}...")
+                
+                try:
+                    # Baca gambar (jika SVG, konversi dulu ke PNG untuk AI)
+                    if file_ext == "svg":
+                        svg_bytes = uploaded_file.read()
+                        png_bytes = cairosvg.svg2png(bytestring=svg_bytes)
+                        image = Image.open(io.BytesIO(png_bytes))
+                    else:
+                        image = Image.open(uploaded_file)
+                    
+                    # Hubungi AI Gemini
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    prompt_analysis = (
+                        "Analyze this image for commercial microstock platforms. "
+                        "Provide: 1. A catchy, SEO-friendly Title (max 70 chars). "
+                        "2. Top 3 primary core keywords describing the image. "
+                        "3. A Category recommendation. "
+                        "Respond STRICTLY in JSON format: {\"title\": \"\", \"core_keywords\": [], \"category\": \"\"}"
+                    )
+                    
+                    response = model.generate_content([prompt_analysis, image])
+                    clean_text = response.text.strip().replace("```json", "").replace("```", "")
+                    result = json.loads(clean_text)
+                    
+                    # Ambil Tren Global & Tambah Keywords
+                    core_keyword = result["core_keywords"][0] if result["core_keywords"] else "stock photo"
+                    trends = get_global_trends(core_keyword)
+                    
+                    prompt_keywords = f"Given core keywords: {', '.join(result['core_keywords'])} and these global search trends: {', '.join(trends)}. Generate exactly 45 highly relevant microstock tags/keywords separated by commas. Focus on global buyers."
+                    keywords_response = model.generate_content(prompt_keywords)
+                    keywords_text = keywords_response.text.strip()
+                    
+                    # Masukkan data ke dalam list gabungan
+                    all_results.append({
+                        'Filename': uploaded_file.name,
+                        'Title': result["title"],
+                        'Keywords': keywords_text
+                    })
+                    
+                except Exception as e:
+                    st.warning(f"Gagal memproses {uploaded_file.name}: {e}")
+                
+                # Update progress bar
+                progress_bar.progress((index + 1) / len(uploaded_files))
+            
+            status_text.text("✅ Selesai memproses semua file!")
+            
+            # Jika ada hasil yang sukses, buatkan satu file CSV gabungan
+            if all_results:
+                st.session_state['batch_csv_data'] = pd.DataFrame(all_results)
         
-        # Tampilkan Kolom Kiri (Preview) dan Kolom Kanan (Hasil)
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.image(image, caption=f"Preview Gambar ({file_ext.upper()})", use_container_width=True)
+        # Tampilkan hasil download jika data batch sudah selesai diproses
+        if 'batch_csv_data' in st.session_state:
+            df_result = st.session_state['batch_csv_data']
             
-        with col2:
-            st.subheader("Hasil Optimasi Metadata")
+            st.markdown("---")
+            st.subheader("📊 Hasil Batch Metadata")
+            st.dataframe(df_result, use_container_width=True) # Tampilkan tabel pratinjau hasil
             
-            if st.button("Generate Metadata 🚀", type="primary"):
-                with st.spinner("Menganalisis gambar & tren pasar global..."):
-                    try:
-                        # Inisialisasi Model AI Vision
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        
-                        # Prompt Analisis Gambar
-                        prompt_analysis = (
-                            "Analyze this image for commercial microstock platforms. "
-                            "Provide: 1. A catchy, SEO-friendly Title (max 70 chars). "
-                            "2. Top 3 primary core keywords describing the image. "
-                            "3. A Category recommendation. "
-                            "Respond STRICTLY in JSON format: {\"title\": \"\", \"core_keywords\": [], \"category\": \"\"}"
-                        )
-                        
-                        response = model.generate_content([prompt_analysis, image])
-                        
-                        # Bersihkan & Parsing JSON dari AI
-                        clean_text = response.text.strip().replace("```json", "").replace("```", "")
-                        result = json.loads(clean_text)
-                        
-                        # Ambil Tren Global Berdasarkan Core Keyword
-                        core_keyword = result["core_keywords"][0] if result["core_keywords"] else "stock photo"
-                        trends = get_global_trends(core_keyword)
-                        
-                        # Menghasilkan 45 Keywords Komersial
-                        prompt_keywords = f"Given core keywords: {', '.join(result['core_keywords'])} and these global search trends: {', '.join(trends)}. Generate exactly 45 highly relevant microstock tags/keywords separated by commas. Focus on global buyers."
-                        keywords_response = model.generate_content(prompt_keywords)
-                        keywords_text = keywords_response.text.strip()
-                        
-                        # Menyimpan hasil sementara ke session_state agar tidak hilang saat tombol unduh diklik
-                        st.session_state['metadata_result'] = {
-                            'filename': uploaded_file.name,
-                            'category': result["category"],
-                            'title': result["title"],
-                            'keywords': keywords_text
-                        }
-                        
-                    except Exception as e:
-                        st.error(f"Terjadi kesalahan AI: {e}. Periksa kembali API Key Anda.")
-            
-            # Jika metadata sudah pernah di-generate, tampilkan hasilnya
-            if 'metadata_result' in st.session_state:
-                res_data = st.session_state['metadata_result']
-                
-                title_val = st.text_input("📝 Judul SEO Global", value=res_data['title'])
-                keywords_val = st.text_area("🔑 Keywords / Tags (Pisahkan dengan koma)", value=res_data['keywords'], height=150)
-                st.text_input("🏷️ Kategori Disarankan", value=res_data['category'], disabled=True)
-                
-                st.markdown("---")
-                st.subheader("💾 Opsi Simpan & Tempel (Adobe Stock)")
-                
-                # Fitur 1: File CSV Otomatis untuk Adobe Stock
-                # Format CSV Adobe Stock membutuhkan kolom: Filename, Title, Keywords
-                adobe_df = pd.DataFrame({
-                    'Filename': [res_data['filename']],
-                    'Title': [title_val],
-                    'Keywords': [keywords_val]
-                })
-                
-                csv_data = adobe_df.to_csv(index=False).encode('utf-8')
-                
-                st.download_button(
-                    label="📥 Download Adobe Stock CSV",
-                    data=csv_data,
-                    file_name=f"adobe_stock_{res_data['filename'].split('.')[0]}.csv",
-                    mime='text/csv',
-                    use_container_width=True
-                )
-                
-                st.caption("💡 Tips CSV: Di dasbor kontributor Adobe Stock, klik 'Upload CSV' lalu masukkan file yang Anda unduh di atas. Semua metadata gambar akan langsung terisi otomatis sekaligus!")
+            # Buat tombol download untuk 1 file CSV tunggal isi semua gambar
+            csv_bytes = df_result.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download 1 File CSV Gabungan (Untuk Semua Gambar)",
+                data=csv_bytes,
+                file_name="adobe_stock_batch_metadata.csv",
+                mime='text/csv',
+                use_container_width=True
+            )
+            st.success("Selesai! Sekarang Anda cukup unggah 1 file CSV ini ke Adobe Stock, dan semua gambar Anda akan langsung terisi metadatanya secara otomatis.")
